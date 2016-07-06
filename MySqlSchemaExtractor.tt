@@ -1,0 +1,267 @@
+<#@ template debug="false" hostspecific="false" language="C#" #>
+<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Data" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Data.Odbc" #>
+<#@ output extension=".cs" #>
+
+using System;
+using System.Collections;
+using System.Linq;
+using System.Data;
+
+namespace Iris.Core.Databases.MySql
+{
+
+	<# 		
+		string connStr = "";
+
+		Dictionary<string, List<string>> items = GetDatabaseItems(connStr); 
+
+		List<string> proceedSchemas = new List<string>();
+		proceedSchemas.Add("LSMX");
+		proceedSchemas.Add("iris");
+
+		foreach(KeyValuePair<string, List<string>> item in items) 
+		{ 
+			if(!proceedSchemas.Contains(item.Key)) continue;
+	#>	
+	    namespace Iris.Core.Databases.MySql.<#= item.Key #> 
+		{
+			<# foreach(string table in item.Value) {  #>
+
+			public static class Table_<#= table #>
+			{
+				public class ENTITY_<#= table #>
+				{
+					<# var helper = GenerateClassHelper(item.Key, table, connStr); #>
+					<# foreach(TypeHelper h in helper) { #>
+
+					public <#= h.TypeName #> <#= h.ColName #> {get; set;}						
+
+					<# } #>
+
+					public static ENTITY_<#= table #> FromReader(IDataReader reader)
+					{
+						ENTITY_<#= table #> model = new ENTITY_<#= table #>();
+						<# foreach(TypeHelper h in helper) { #>
+						model.<#= h.ColName #> = (<#= h.TypeName #>)reader["<#= h.ColName #>"];
+						<# } #>
+
+						return model;
+					}
+				}				
+
+				public static string All
+				{
+					get
+					{
+						return @"<#= GenerateSelectAllStatementSpecific(item.Key, table, connStr) #>";
+					}
+				}
+			}
+			<# } #>
+		}
+
+	<# } #>
+
+
+
+}
+
+<#+
+
+public class TypeHelper
+{
+	public string ColName {get; set;}
+
+	public Type Type {get; set;}
+	public string TypeName 
+	{
+		get
+		{
+			return FixName(Type.UnderlyingSystemType.Name);
+		}
+	}
+
+	public string RawTypeName
+	{
+		get
+		{
+			return Type.UnderlyingSystemType.Name;
+		}
+	}
+
+	private string FixName(string name)
+	{
+		name = name.ToUpper().Trim();
+
+		if(name.Contains("INT32"))
+		{
+			return "int";
+		}
+		else if(name.Contains("INT64"))
+		{
+			return "long";
+		}
+		else if(name.Contains("STRING"))
+		{
+			return "string";
+		}
+		else if(name.Contains("DATE"))
+		{
+			return "DateTime";
+		}	
+		else if(name.Contains("BOOL"))
+		{
+			return "bool";
+		}	
+		else if(name.Contains("DOUBLE"))
+		{
+			return "double";
+		}
+		else if(name.Contains("DECIMAL"))
+		{
+			return "decimal";
+		}
+		else if(name.Contains("SHORT"))
+		{
+			return "short";
+		}
+		else if(name.Contains("BYTE"))
+		{
+			return "byte";
+		}
+		else if(name.Contains("BYTE[]"))
+		{
+			return "byte []";
+		}
+		else
+		{
+			return "object";
+		}
+	}
+}
+
+private string GenerateSelectAllStatement(string schema, string table, string connectionStr)
+{
+	return String.Format("SELECT * FROM {0}.{1}", schema, table);
+}
+
+private List<TypeHelper> GenerateClassHelper(string schema, string table, string connectionStr)
+{
+	try
+	{
+		List<TypeHelper> helper = new List<TypeHelper>();		
+		List<string> cols = new List<string>();
+		using(OdbcConnection conn = new OdbcConnection(connectionStr))
+		{
+			conn.Open();
+			using(OdbcCommand cmd = conn.CreateCommand())
+			{
+				cmd.CommandType = System.Data.CommandType.Text;
+				cmd.CommandText = GenerateSelectAllStatement(schema, table, connectionStr);
+
+				using(var reader = cmd.ExecuteReader())
+				{
+					int colCount = reader.FieldCount;
+					for(int i = 0; i < colCount; i++)
+					{
+						string col = reader.GetName(i);
+						
+						TypeHelper h = new TypeHelper();
+						h.ColName = col;
+						h.Type = reader.GetFieldType(i);
+
+						helper.Add(h);
+					}
+				}
+			}
+		}
+
+		string formatted = String.Join(",", cols);
+
+		return helper;
+	}
+	catch
+	{
+		return new List<TypeHelper>();
+	}
+}
+
+private string GenerateSelectAllStatementSpecific(string schema, string table, string connectionStr)
+{
+	try
+	{
+		string alias = ((char)new Random().Next(65, 90)).ToString();
+		List<string> cols = new List<string>();
+		using(OdbcConnection conn = new OdbcConnection(connectionStr))
+		{
+			conn.Open();
+			using(OdbcCommand cmd = conn.CreateCommand())
+			{
+				cmd.CommandType = System.Data.CommandType.Text;
+				cmd.CommandText = GenerateSelectAllStatement(schema, table, connectionStr);
+
+				using(var reader = cmd.ExecuteReader())
+				{
+					int colCount = reader.FieldCount;
+					for(int i = 0; i < colCount; i++)
+					{
+						string col = reader.GetName(i);
+						cols.Add(alias + "." + col);
+					}
+				}
+			}
+		}
+
+		string formatted = String.Join(",", cols);
+
+		return String.Format("\r\n\tSELECT {0} \r\n\tFROM {1}.{2} {3}\r\n", formatted, schema, table, alias);
+	}
+	catch(Exception ex)
+	{
+		return ex.Message;
+	}
+}
+
+private Dictionary<string, List<string>> GetDatabaseItems(string connectionStr)
+{
+	Dictionary<string, List<string>> items = new Dictionary<string, List<string>>();
+
+	using(OdbcConnection conn = new OdbcConnection(connectionStr))
+	{
+		conn.Open();
+		using(OdbcCommand cmd = conn.CreateCommand())
+		{
+			cmd.CommandType = System.Data.CommandType.Text;
+			cmd.CommandText = @"select db.table_schema, db.table_name from information_schema.tables db";
+
+			using(var reader = cmd.ExecuteReader())
+			{
+				while(reader.Read()) 
+				{
+					string schema = reader["table_schema"].ToString();
+					string table = reader["table_name"].ToString();
+
+					if(!items.ContainsKey(schema))
+					{
+						items.Add(schema, new List<string>());
+					}
+
+					List<string> tables = items[schema];
+					tables.Add(table);
+					
+				}
+			}
+		}
+	}
+
+	return items;
+}
+
+
+
+#>
